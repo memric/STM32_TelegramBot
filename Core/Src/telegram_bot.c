@@ -8,6 +8,7 @@
 #include "telegram_bot.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 #include "cJSON.h"
 
 #include "mbedtls/net.h"
@@ -47,6 +48,7 @@ const char *DRBG_PERSONALIZED_STR = "Telegram Bot";
 extern const char *telegram_cert_pem;
 
 static TaskHandle_t telebot_task = NULL;
+static QueueHandle_t msg_queue = NULL;
 /**
  * The DRBG used throughout the TLS connectionc
  */
@@ -71,6 +73,7 @@ extern mbedtls_ssl_context ssl;
 char url[256];
 char buf[1024];
 char resp[512] = {0};
+static uint32_t last_chat_id = 0;
 
 static cJSON *mainMarkup = NULL;
 
@@ -82,9 +85,6 @@ int32_t TeleBot_SendMessage(uint32_t chat_id, const char *msg, cJSON *markup);
 void TeleBot_MessageCallback(uint32_t chat_id, const char *msg);
 int configureTlsContexts(int *socket, const char *server_name);
 int sslVerify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags);
-int sslSend(void *ctx, const unsigned char *buf, size_t len);
-int sslRecv(void *ctx, unsigned char *buf, size_t len);
-
 /**
  * @brief	Bot initialization
  *
@@ -113,15 +113,9 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
 		char *req, uint32_t req_len,
 		char *resp, uint32_t resp_len)
 {
-	int32_t ret, len;
+	int32_t ret, len = -1;
 	int32_t http_req_len = 0;
     int32_t ret_len = 0;
-//    struct sockaddr_in server_addr;
-
-    /*Compose url*/
-    len = snprintf(url, sizeof(url), WEB_URL"%s/%s", BOT_TOKEN, t_mthd);
-    url[len] = '\0';
-//    TRACE("HTTPS url: %s", url);
 
     /* Connect */
     int socket;
@@ -138,192 +132,188 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
 
         mbedtls_ssl_set_bio(&ssl, &socket, mbedtls_net_send, mbedtls_net_recv, NULL);
 
-//        if (esp_tls_conn_http_new_sync(url, &cfg, tls) == 1)
+        /* Start the TLS handshake */
+        mbedtls_printf("Starting the TLS handshake...\r\n");
+        do {
+            ret = mbedtls_ssl_handshake(&ssl);
+        } while(ret != 0 &&
+            (ret == MBEDTLS_ERR_SSL_WANT_READ ||
+                ret == MBEDTLS_ERR_SSL_WANT_WRITE));
+        if (ret < 0) {
+            mbedtls_printf("mbedtls_ssl_handshake() returned -0x%04"PRIx32"\r\n", -ret);
+            return ret;
+        }
+        mbedtls_printf("Successfully completed the TLS handshake\r\n");
+
+        /*Compose request header*/
+        len = snprintf(buf, sizeof(buf), "%s /bot%s/%s HTTP/1.1\r\n"
+                       "Host: "WEB_SERVER"\r\n"
+                       /*"User-Agent: esp-idf/1.0 esp32\r\n"*/
+                       "Connection: close\r\n",
+                       http_mthd, BOT_TOKEN, t_mthd);
+
+        if (len > 0)
         {
+            http_req_len += len;
 
-            /* Start the TLS handshake */
-            mbedtls_printf("Starting the TLS handshake...\r\n");
-            do {
-                ret = mbedtls_ssl_handshake(&ssl);
-            } while(ret != 0 &&
-                (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                    ret == MBEDTLS_ERR_SSL_WANT_WRITE));
-            if (ret < 0) {
-                mbedtls_printf("mbedtls_ssl_handshake() returned -0x%04"PRIx32"\r\n", -ret);
-                return ret;
-            }
-            mbedtls_printf("Successfully completed the TLS handshake\r\n");
-
-            /*Compose request header*/
-            len = snprintf(buf, sizeof(buf), "%s /bot%s/%s HTTP/1.1\r\n"
-                           "Host: "WEB_SERVER"\r\n"
-                           /*"User-Agent: esp-idf/1.0 esp32\r\n"*/
-                           "Connection: close\r\n",
-                           http_mthd, BOT_TOKEN, t_mthd);
-
-            if (len > 0)
+            if ((req != NULL) && (req_len < (sizeof(buf) - http_req_len)))
             {
-                http_req_len += len;
+                /*Append request string*/
+                len = snprintf(&buf[http_req_len], sizeof(buf) - len,
+                               "Content-Type: application/json\r\n"
+                               "Content-Length: %"PRIu32"\r\n\r\n", req_len);
 
-                if ((req != NULL) && (req_len < (sizeof(buf) - http_req_len)))
+                if (len > 0)
                 {
-                    /*Append request string*/
-                    len = snprintf(&buf[http_req_len], sizeof(buf) - len,
-                                   "Content-Type: application/json\r\n"
-                                   "Content-Length: %"PRIu32"\r\n\r\n", req_len);
+                    http_req_len += len;
 
-                    if (len > 0)
-                    {
-                        http_req_len += len;
-
-                        len = snprintf(&buf[http_req_len], sizeof(buf) - http_req_len, "%s", req);
-
-                        if (len > 0) { http_req_len += len; }
-                        else { http_req_len = 0; }
-                    }
-                    else
-                    {
-                        http_req_len = 0;
-                    }
-                }
-                else
-                {
-                    /*Append \r\n for GET request*/
-                    len = snprintf(&buf[http_req_len], sizeof(buf) - http_req_len, "\r\n");
+                    len = snprintf(&buf[http_req_len], sizeof(buf) - http_req_len, "%s", req);
 
                     if (len > 0) { http_req_len += len; }
                     else { http_req_len = 0; }
                 }
-
-                TRACE("HTTP Request: %s\r\n", buf);
-            }
-
-            if (http_req_len == 0)
-            {
-                TRACE("Request composing error\r\n");
+                else
+                {
+                    http_req_len = 0;
+                }
             }
             else
             {
-                size_t written_bytes = 0;
+                /*Append \r\n for GET request*/
+                len = snprintf(&buf[http_req_len], sizeof(buf) - http_req_len, "\r\n");
 
-                /*write request*/
+                if (len > 0) { http_req_len += len; }
+                else { http_req_len = 0; }
+            }
+
+            TRACE("HTTP Request: %s\r\n", buf);
+        }
+
+        if (http_req_len == 0)
+        {
+            TRACE("Request composing error\r\n");
+        }
+        else
+        {
+            size_t written_bytes = 0;
+
+            /*write request*/
+            do {
+                ret = mbedtls_ssl_write(&ssl, (unsigned char *) buf + written_bytes, http_req_len - written_bytes);
+
+                if (ret > 0)
+                {
+                    TRACE("%"PRIi32" bytes written\r\n", ret);
+                    written_bytes += ret;
+                }
+                else
+                {
+                    TRACE("ssl write error\r\n");
+                    break;
+                }
+            } while (written_bytes < http_req_len);
+
+            //                /* Print information about the TLS connection */
+            //                ret = mbedtls_x509_crt_info(buf, sizeof(buf),
+            //                                            "\r  ", mbedtls_ssl_get_peer_cert(&ssl));
+            //                if (ret < 0) {
+            //                    mbedtls_printf("mbedtls_x509_crt_info() returned -0x%04X\r\n", -ret);
+            //                    return ret;
+            //                }
+            //                mbedtls_printf("Server certificate:\n%s\n", buf);
+            //
+            //                /* Ensure certificate verification was successful */
+            //                uint32_t flags = mbedtls_ssl_get_verify_result(&ssl);
+            //                if (flags != 0) {
+            //                    ret = mbedtls_x509_crt_verify_info(buf, sizeof(buf), "\r  ! ", flags);
+            //                    if (ret < 0) {
+            //                        mbedtls_printf("mbedtls_x509_crt_verify_info() returned "
+            //                            "-0x%04X\r\n", -ret);
+            //                        return ret;
+            //                    } else {
+            //                        mbedtls_printf("Certificate verification failed (flags %lu):"
+            //                            "\r\n%s\r\n", flags, buf);
+            //                        return -1;
+            //                    }
+            //                } else {
+            //                    mbedtls_printf("Certificate verification passed\n");
+            //                }
+
+            mbedtls_printf("Established TLS connection to %s\r\n", WEB_SERVER);
+
+            /*Read response*/
+            if (written_bytes == http_req_len)
+            {
+                TRACE("Reading HTTP response...\r\n");
+
                 do {
-                    ret = mbedtls_ssl_write(&ssl, (unsigned char *) buf + written_bytes, http_req_len - written_bytes);
+                    len = sizeof(buf);
+                    memset(buf, 0, len);
+                    ret = mbedtls_ssl_read(&ssl, (unsigned char *) buf, len);
 
-                    if (ret > 0)
+                    if(ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE)
                     {
-                        TRACE("%"PRIi32" bytes written\r\n", ret);
-                        written_bytes += ret;
+                        continue;
+                    }
+
+                    if(ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
+                    {
+                        break;
+                    }
+
+                    if (ret < 0) {
+                        TRACE("mbedtls_ssl_read returned [-0x%02"PRIx32"]\r\n", -ret);
+                        break;
+                    }
+
+                    if (ret == 0) {
+                        TRACE("\r\nEoF\r\n");
+                        break;
+                    }
+
+                    len = ret;
+                    TRACE("%"PRIi32" bytes read\r\n", len);
+                    /* Print response directly to stdout as it is read */
+                    for (int i = 0; i < len; i++) {
+                        putchar(buf[i]);
+                    }
+                    putchar('\n'); // JSON output doesn't have a newline at end
+
+                    /*JSON beginning searching*/
+                    char *pch = strstr(buf, "\r\n{");
+                    if (pch != NULL)
+                    {
+                        ret_len = 0;
+                        len -= (pch - buf);
                     }
                     else
                     {
-                        TRACE("ssl write error\r\n");
-                        break;
+                        pch = buf;
                     }
-                } while (written_bytes < http_req_len);
+                    /*Copy response*/
+                    while ((len > 0) && (ret_len < resp_len))
+                    {
+                        *resp++ = *pch++;
+                        ret_len++;
+                        len--;
+                    }
 
-//                /* Print information about the TLS connection */
-//                ret = mbedtls_x509_crt_info(buf, sizeof(buf),
-//                                            "\r  ", mbedtls_ssl_get_peer_cert(&ssl));
-//                if (ret < 0) {
-//                    mbedtls_printf("mbedtls_x509_crt_info() returned -0x%04X\r\n", -ret);
-//                    return ret;
-//                }
-//                mbedtls_printf("Server certificate:\n%s\n", buf);
-//
-//                /* Ensure certificate verification was successful */
-//                uint32_t flags = mbedtls_ssl_get_verify_result(&ssl);
-//                if (flags != 0) {
-//                    ret = mbedtls_x509_crt_verify_info(buf, sizeof(buf), "\r  ! ", flags);
-//                    if (ret < 0) {
-//                        mbedtls_printf("mbedtls_x509_crt_verify_info() returned "
-//                            "-0x%04X\r\n", -ret);
-//                        return ret;
-//                    } else {
-//                        mbedtls_printf("Certificate verification failed (flags %lu):"
-//                            "\r\n%s\r\n", flags, buf);
-//                        return -1;
-//                    }
-//                } else {
-//                    mbedtls_printf("Certificate verification passed\n");
-//                }
-
-                mbedtls_printf("Established TLS connection to %s\r\n", WEB_SERVER);
-
-                /*Read response*/
-                if (written_bytes == http_req_len)
-                {
-                    TRACE("Reading HTTP response...\r\n");
-
-                    do {
-                        len = sizeof(buf);
-                        memset(buf, 0, len);
-                        ret = mbedtls_ssl_read(&ssl, (unsigned char *) buf, len);
-
-                        if(ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE)
-                        {
-                            continue;
-                        }
-
-                        if(ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
-                        {
-                            break;
-                        }
-
-                        if (ret < 0) {
-                            TRACE("mbedtls_ssl_read returned [-0x%02"PRIx32"]\r\n", -ret);
-                            break;
-                        }
-
-                        if (ret == 0) {
-                            TRACE("\r\nEoF\r\n");
-                            break;
-                        }
-
-                        len = ret;
-                        TRACE("%"PRIi32" bytes read\r\n", len);
-                        /* Print response directly to stdout as it is read */
-                        for (int i = 0; i < len; i++) {
-                            putchar(buf[i]);
-                        }
-                        putchar('\n'); // JSON output doesn't have a newline at end
-
-                        /*JSON beginning searching*/
-                        char *pch = strstr(buf, "\r\n{");
-                        if (pch != NULL)
-                        {
-                            ret_len = 0;
-                            len -= (pch - buf);
-                        }
-                        else
-                        {
-                            pch = buf;
-                        }
-                        /*Copy response*/
-                        while ((len > 0) && (ret_len < resp_len))
-                        {
-                            *resp++ = *pch++;
-                            ret_len++;
-                            len--;
-                        }
-
-                    } while (1);
-                }
+                } while (1);
             }
         }
 
         /* Close connection */
         mbedtls_ssl_close_notify(&ssl);
+
+        mbedtls_net_free((mbedtls_net_context *) &socket);
+        mbedtls_x509_crt_free( &cacert );
+        mbedtls_ssl_free(&ssl);
+        mbedtls_ssl_config_free(&conf);
+        mbedtls_ctr_drbg_free(&ctr_drbg);
+        mbedtls_entropy_free(&entropy);
     }
 
-    mbedtls_net_free((mbedtls_net_context *) &socket);
-    mbedtls_x509_crt_free( &cacert );
-    mbedtls_ssl_free(&ssl);
-    mbedtls_ssl_config_free(&conf);
-    mbedtls_ctr_drbg_free(&ctr_drbg);
-    mbedtls_entropy_free(&entropy);
-
-    if (len < 0) return -1;
+    if (len < 0) ret_len = -1;
 
     return ret_len;
 }
@@ -438,6 +428,19 @@ int32_t TeleBot_SendMessage(uint32_t chat_id, const char *msg, cJSON *markup)
 }
 
 /**
+ * @brief   Enqueue massage to send
+ *
+ * @param msg
+ */
+void TeleBot_MessagePush(const char *msg)
+{
+    if (msg_queue != NULL)
+    {
+        xQueueSend(msg_queue, &msg, 10);
+    }
+}
+
+/**
  * Main task
  */
 static void TeleBot_Task(void *arg)
@@ -446,11 +449,7 @@ static void TeleBot_Task(void *arg)
 	int32_t id = -1;
 	int32_t resp_len;
 
-
-//	if (configureTlsContexts(NULL, WEB_SERVER) != 0)
-//	{
-//	    TRACE("SSL config failed.\r\n");
-//	}
+	msg_queue = xQueueCreate(10, sizeof(const char *));
 
 	/*Create markup*/
 	mainMarkup = cJSON_CreateObject();
@@ -459,20 +458,16 @@ static void TeleBot_Task(void *arg)
 	{
 		cJSON *btn1 = cJSON_CreateString("Info");
 		cJSON *btn2 = cJSON_CreateString("Sys Tick");
-		cJSON *btn3 = cJSON_CreateString("Btn3");
 
 		cJSON *btns = cJSON_CreateArray();
 		cJSON *row1 = cJSON_CreateArray();
-		cJSON *row2 = cJSON_CreateArray();
 
-		if (btn2 != NULL && btn1 != NULL && btn3 != NULL &&
-				btns != NULL && row1 != NULL && row2 != NULL)
+		if (btn2 != NULL && btn1 != NULL &&
+				btns != NULL && row1 != NULL)
 		{
 			cJSON_AddItemToArray(row1, btn1);
 			cJSON_AddItemToArray(row1, btn2);
-			cJSON_AddItemToArray(row2, btn3);
 			cJSON_AddItemToArray(btns, row1);
-			cJSON_AddItemToArray(btns, row2);
 
 			cJSON_AddItemToObject(mainMarkup, "keyboard", btns);
 		}
@@ -488,6 +483,25 @@ static void TeleBot_Task(void *arg)
 			memset(resp, 0, resp_len);
 		}
 
+		/* Check messages to send */
+		if (msg_queue != NULL)
+		{
+		    BaseType_t ret;
+
+		    do
+		    {
+		        char *msg = NULL;
+
+		        ret = xQueueReceive(msg_queue, &msg, 0);
+
+		        if (msg != NULL && last_chat_id != 0)
+		        {
+		            TeleBot_SendMessage(last_chat_id, msg, mainMarkup);
+		        }
+		    }
+		    while(ret == pdPASS);
+		}
+
 		vTaskDelay(1000 / portTICK_PERIOD_MS);
 	}
 }
@@ -497,7 +511,7 @@ static void TeleBot_Task(void *arg)
  */
 void TeleBot_MessageCallback(uint32_t chat_id, const char *msg)
 {
-    (void) chat_id;
+    last_chat_id = chat_id;
 
     char resp_msg[128];
 
@@ -616,18 +630,4 @@ int sslVerify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 #endif /* HELLO_HTTPS_CLIENT_DEBUG_LEVEL > 0 */
 
     return ret;
-}
-
-int sslSend(void *ctx, const unsigned char *buf, size_t len)
-{
-    int socket = *((int *) ctx);
-
-    return send(socket, buf, len, 0);
-}
-
-int sslRecv(void *ctx, unsigned char *buf, size_t len)
-{
-    int socket = *((int *) ctx);
-
-    return recv(socket, buf, len, 0);
 }

@@ -23,6 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "event_groups.h"
 #include "telegram_bot.h"
 #include "lwip.h"
 #include "lwip/sockets.h"
@@ -37,7 +38,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define EVENT_BUTTON            (1 << 0)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -86,7 +87,8 @@ SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
-
+static EventGroupHandle_t hSystemEventGroup;
+static StaticEventGroup_t systemEventGroupBuffer;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -1536,6 +1538,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DCMI_PWR_EN_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : B_USER_Pin */
+  GPIO_InitStruct.Pin = B_USER_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(B_USER_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pin : LCD_INT_Pin */
   GPIO_InitStruct.Pin = LCD_INT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
@@ -1579,6 +1587,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF10_OTG_HS;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
 }
@@ -1612,6 +1624,25 @@ void ethernetif_notify_status_changed(struct netif *netif)
     }
 
 }
+
+/**
+ * @brief           External interrupt HAL Callback
+ * @param GPIO_Pin  Pin
+ */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if ((GPIO_Pin == B_USER_Pin) &&
+        (HAL_GPIO_ReadPin(B_USER_GPIO_Port, B_USER_Pin) == GPIO_PIN_SET))
+    {
+        xEventGroupSetBitsFromISR(hSystemEventGroup,
+                                  EVENT_BUTTON,
+                                  &xHigherPriorityTaskWoken);
+    }
+
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1625,11 +1656,24 @@ void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN 5 */
     printf("--- System Start ---\r\n");
+
+    /*Create event group for system events */
+    hSystemEventGroup = xEventGroupCreateStatic(&systemEventGroupBuffer);
+
     MX_LWIP_Init();
   /* Infinite loop */
   for(;;)
   {
-    osDelay(10);
+      /* Wait for any event */
+      EventBits_t eValue = xEventGroupWaitBits(hSystemEventGroup, 0xFFFF, pdTRUE, pdFALSE, 0);
+
+      if (eValue & EVENT_BUTTON)
+      {
+          printf("User button is pressed\r\n");
+          TeleBot_MessagePush("Button pressed");
+      }
+
+      vTaskDelay(100);
   }
   /* USER CODE END 5 */
 }

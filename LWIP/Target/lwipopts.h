@@ -69,8 +69,6 @@
 #define TCP_WND_UPDATE_THRESHOLD 536
 /*----- Default Value for LWIP_NETIF_STATUS_CALLBACK: 0 ---*/
 #define LWIP_NETIF_STATUS_CALLBACK 1
-/*----- Default Value for LWIP_NETIF_EXT_STATUS_CALLBACK: 0 ---*/
-#define LWIP_NETIF_EXT_STATUS_CALLBACK 1
 /*----- Value in opt.h for LWIP_NETIF_LINK_CALLBACK: 0 -----*/
 #define LWIP_NETIF_LINK_CALLBACK 1
 /*----- Value in opt.h for TCPIP_THREAD_STACKSIZE: 0 -----*/

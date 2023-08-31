@@ -10,6 +10,7 @@
 
 
 void TeleBot_Init(void);
+void TeleBot_MessagePush(const char *msg);
 
 
 #endif /* MAIN_TELEGRAM_BOT_H_ */
