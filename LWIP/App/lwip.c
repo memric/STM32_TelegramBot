@@ -36,7 +36,7 @@ static void ethernet_link_status_updated(struct netif *netif);
 void Error_Handler(void);
 
 /* USER CODE BEGIN 1 */
-
+extern void ethernetif_notify_status_changed(struct netif *netif);
 /* USER CODE END 1 */
 
 /* Variables Initialization */
@@ -87,7 +87,7 @@ void MX_LWIP_Init(void)
   osThreadDef(EthLink, ethernet_link_thread, osPriorityBelowNormal, 0, configMINIMAL_STACK_SIZE *2);
   osThreadCreate (osThread(EthLink), &gnetif);
 /* USER CODE END H7_OS_THREAD_DEF_CREATE_CMSIS_RTOS_V1 */
-
+  netif_set_status_callback(&gnetif, ethernetif_notify_status_changed);
   /* Start DHCP negotiation for a network interface (IPv4) */
   dhcp_start(&gnetif);
 
@@ -113,11 +113,13 @@ static void ethernet_link_status_updated(struct netif *netif)
   if (netif_is_up(netif))
   {
 /* USER CODE BEGIN 5 */
+      printf("link is up\r\n");
 /* USER CODE END 5 */
   }
   else /* netif is down */
   {
 /* USER CODE BEGIN 6 */
+      printf("link is down\r\n");
 /* USER CODE END 6 */
   }
 }

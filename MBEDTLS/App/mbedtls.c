@@ -52,7 +52,6 @@ void MX_MBEDTLS_Init(void)
   mbedtls_ctr_drbg_init(&ctr_drbg);
   mbedtls_entropy_init( &entropy );
   /* USER CODE BEGIN 3 */
-
   /* USER CODE END 3 */
 
 }
