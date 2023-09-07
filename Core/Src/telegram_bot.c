@@ -21,7 +21,6 @@
 #include "mbedtls/debug.h"
 #include "mbedtls/x509.h"
 
-//#include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 
@@ -30,17 +29,16 @@
 #include <string.h>
 #include <inttypes.h>
 
-#define WEB_SERVER 			"api.telegram.org"
-#define WEB_URL 			WEB_SERVER"/bot"
+#define WEB_SERVER          "api.telegram.org"
 #ifndef BOT_TOKEN
 #error "Telegram bot token must be provided"
 #endif
 #define SERVER_PORT         443
 
-#define UPDATE_TIMEOUT		5
+#define UPDATE_TIMEOUT      5
 
-#define HTTP_METHOD_GET		"GET"
-#define HTTP_METHOD_POST	"POST"
+#define HTTP_METHOD_GET     "GET"
+#define HTTP_METHOD_POST    "POST"
 
 #define TRACE               printf
 
@@ -50,7 +48,7 @@ extern const char *telegram_cert_pem;
 static TaskHandle_t telebot_task = NULL;
 static QueueHandle_t msg_queue = NULL;
 /**
- * The DRBG used throughout the TLS connectionc
+ * The DRBG used throughout the TLS connection
  */
 extern mbedtls_ctr_drbg_context ctr_drbg;
 /**
@@ -77,49 +75,59 @@ static uint32_t last_chat_id = 0;
 
 static cJSON *mainMarkup = NULL;
 
-static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
-		char *req, uint32_t req_len,
-		char *resp, uint32_t resp_len);
+static int32_t TeleBot_Http_Request(const char *http_mthd,
+                                    const char *t_mthd,
+                                    char *req,
+                                    uint32_t req_len,
+                                    char *resp,
+                                    uint32_t resp_len);
 static void TeleBot_Task(void *arg);
 int32_t TeleBot_SendMessage(uint32_t chat_id, const char *msg, cJSON *markup);
 void TeleBot_MessageCallback(uint32_t chat_id, const char *msg);
 int configureTlsContexts(int *socket, const char *server_name);
 int sslVerify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags);
+
 /**
- * @brief	Bot initialization
+ * @brief	Bot initialization.
  *
  */
 void TeleBot_Init(void)
 {
-	if (xTaskCreate(TeleBot_Task, "Telegram", 1024*4, NULL, 3, &telebot_task) != pdPASS)
-	{
-	    TRACE("Telegram bot task error\r\n");
-	}
+    if (xTaskCreate(TeleBot_Task, "Telegram", 1024 * 4, NULL, 3, &telebot_task) != pdPASS)
+    {
+        TRACE("Telegram bot task error\r\n");
+    }
 }
 
 /**
- * @brief 	Connects to Telegram bot server, sends http request and
- * 			gets response
+ * @brief           Connects to Telegram bot server, sends http request and
+ *                  gets response.
  *
- * @param http_mthd	HTTP method GET or POST
- * @param t_mthd	Telegram method
- * @param req		Request string (JSON)
- * @param req_len	Request length
- * @param resp		Pointer to buffer for response from server
- * @param resp_len	Response lengthp
+ * @param http_mthd HTTP method GET or POST
+ * @param t_mthd    Telegram method
+ * @param req       Request string (JSON)
+ * @param req_len   Request length
+ * @param resp      Pointer to buffer for response from server
+ * @param resp_len  Response lengthp
  * @return
  */
-static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
-		char *req, uint32_t req_len,
-		char *resp, uint32_t resp_len)
+static int32_t TeleBot_Http_Request(const char *http_mthd,
+                                    const char *t_mthd,
+                                    char *req,
+                                    uint32_t req_len,
+                                    char *resp,
+                                    uint32_t resp_len)
 {
-	int32_t ret, len = -1;
-	int32_t http_req_len = 0;
+    int32_t ret, len = -1;
+    int32_t http_req_len = 0;
     int32_t ret_len = 0;
 
     /* Connect */
     int socket;
-    if ((ret = mbedtls_net_connect((mbedtls_net_context *) &socket, WEB_SERVER, "443", MBEDTLS_NET_PROTO_TCP)) != 0)
+    if ((ret = mbedtls_net_connect((mbedtls_net_context*) &socket,
+                                   WEB_SERVER,
+                                   "443",
+                                   MBEDTLS_NET_PROTO_TCP)) != 0)
     {
         mbedtls_printf("Low lewel connection failed. Ret: %"PRIi32"\r\n", ret);
     }
@@ -134,12 +142,13 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
 
         /* Start the TLS handshake */
         mbedtls_printf("Starting the TLS handshake...\r\n");
-        do {
+        do
+        {
             ret = mbedtls_ssl_handshake(&ssl);
-        } while(ret != 0 &&
-            (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                ret == MBEDTLS_ERR_SSL_WANT_WRITE));
-        if (ret < 0) {
+        }
+        while (ret != 0 && (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE));
+        if (ret < 0)
+        {
             mbedtls_printf("mbedtls_ssl_handshake() returned -0x%04"PRIx32"\r\n", -ret);
             return ret;
         }
@@ -148,8 +157,8 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
         /*Compose request header*/
         len = snprintf(buf, sizeof(buf), "%s /bot%s/%s HTTP/1.1\r\n"
                        "Host: "WEB_SERVER"\r\n"
-                       /*"User-Agent: esp-idf/1.0 esp32\r\n"*/
-                       "Connection: close\r\n",
+        /*"User-Agent: esp-idf/1.0 esp32\r\n"*/
+        "Connection: close\r\n",
                        http_mthd, BOT_TOKEN, t_mthd);
 
         if (len > 0)
@@ -159,9 +168,11 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
             if ((req != NULL) && (req_len < (sizeof(buf) - http_req_len)))
             {
                 /*Append request string*/
-                len = snprintf(&buf[http_req_len], sizeof(buf) - len,
+                len = snprintf(&buf[http_req_len],
+                               sizeof(buf) - len,
                                "Content-Type: application/json\r\n"
-                               "Content-Length: %"PRIu32"\r\n\r\n", req_len);
+                               "Content-Length: %"PRIu32"\r\n\r\n",
+                               req_len);
 
                 if (len > 0)
                 {
@@ -169,8 +180,14 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
 
                     len = snprintf(&buf[http_req_len], sizeof(buf) - http_req_len, "%s", req);
 
-                    if (len > 0) { http_req_len += len; }
-                    else { http_req_len = 0; }
+                    if (len > 0)
+                    {
+                        http_req_len += len;
+                    }
+                    else
+                    {
+                        http_req_len = 0;
+                    }
                 }
                 else
                 {
@@ -182,8 +199,14 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
                 /*Append \r\n for GET request*/
                 len = snprintf(&buf[http_req_len], sizeof(buf) - http_req_len, "\r\n");
 
-                if (len > 0) { http_req_len += len; }
-                else { http_req_len = 0; }
+                if (len > 0)
+                {
+                    http_req_len += len;
+                }
+                else
+                {
+                    http_req_len = 0;
+                }
             }
 
             TRACE("HTTP Request: %s\r\n", buf);
@@ -198,8 +221,11 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
             size_t written_bytes = 0;
 
             /*write request*/
-            do {
-                ret = mbedtls_ssl_write(&ssl, (unsigned char *) buf + written_bytes, http_req_len - written_bytes);
+            do
+            {
+                ret = mbedtls_ssl_write(&ssl,
+                                        (unsigned char*) buf + written_bytes,
+                                        http_req_len - written_bytes);
 
                 if (ret > 0)
                 {
@@ -211,7 +237,8 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
                     TRACE("ssl write error\r\n");
                     break;
                 }
-            } while (written_bytes < http_req_len);
+            }
+            while (written_bytes < http_req_len);
 
             //                /* Print information about the TLS connection */
             //                ret = mbedtls_x509_crt_info(buf, sizeof(buf),
@@ -246,27 +273,30 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
             {
                 TRACE("Reading HTTP response...\r\n");
 
-                do {
+                do
+                {
                     len = sizeof(buf);
                     memset(buf, 0, len);
-                    ret = mbedtls_ssl_read(&ssl, (unsigned char *) buf, len);
+                    ret = mbedtls_ssl_read(&ssl, (unsigned char*) buf, len);
 
-                    if(ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE)
+                    if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE)
                     {
                         continue;
                     }
 
-                    if(ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
+                    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
                     {
                         break;
                     }
 
-                    if (ret < 0) {
+                    if (ret < 0)
+                    {
                         TRACE("mbedtls_ssl_read returned [-0x%02"PRIx32"]\r\n", -ret);
                         break;
                     }
 
-                    if (ret == 0) {
+                    if (ret == 0)
+                    {
                         TRACE("\r\nEoF\r\n");
                         break;
                     }
@@ -274,7 +304,8 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
                     len = ret;
                     TRACE("%"PRIi32" bytes read\r\n", len);
                     /* Print response directly to stdout as it is read */
-                    for (int i = 0; i < len; i++) {
+                    for (int i = 0; i < len; i++)
+                    {
                         putchar(buf[i]);
                     }
                     putchar('\n'); // JSON output doesn't have a newline at end
@@ -298,139 +329,163 @@ static int32_t TeleBot_Http_Request(const char *http_mthd, const char *t_mthd,
                         len--;
                     }
 
-                } while (1);
+                }
+                while (1);
             }
         }
 
         /* Close connection */
         mbedtls_ssl_close_notify(&ssl);
 
-        mbedtls_net_free((mbedtls_net_context *) &socket);
-        mbedtls_x509_crt_free( &cacert );
+        mbedtls_net_free((mbedtls_net_context*) &socket);
+        mbedtls_x509_crt_free(&cacert);
         mbedtls_ssl_free(&ssl);
         mbedtls_ssl_config_free(&conf);
         mbedtls_ctr_drbg_free(&ctr_drbg);
         mbedtls_entropy_free(&entropy);
     }
 
-    if (len < 0) ret_len = -1;
+    if (len < 0)
+    {
+        ret_len = -1;
+    }
 
     return ret_len;
 }
 
 /**
- * getUpdates method
+ * @brief       Implements getUpdates API method
+ *
+ * @param id    Message offset
+ * @return      Response length for success or -1 for error.
  */
 static int32_t TeleBot_GetUpdates(int32_t *id)
 {
-	int32_t retval = -1;
+    int32_t retval = -1;
 
-	/*Construct JSON method object*/
-	cJSON *message = cJSON_CreateObject();
+    /*Construct JSON method object*/
+    cJSON *message = cJSON_CreateObject();
 
-	if (message != NULL)
-	{
-		cJSON *msg_timeout = cJSON_CreateNumber(UPDATE_TIMEOUT);
-		cJSON *msg_offset = cJSON_CreateNumber(*id);
+    if (message != NULL)
+    {
+        cJSON *msg_timeout = cJSON_CreateNumber(UPDATE_TIMEOUT);
+        cJSON *msg_offset = cJSON_CreateNumber(*id);
 
-		if (msg_timeout != NULL && msg_offset != NULL)
-		{
-			cJSON_AddItemToObject(message, "timeout", msg_timeout);
-			cJSON_AddItemToObject(message, "offset", msg_offset);
+        if (msg_timeout != NULL && msg_offset != NULL)
+        {
+            cJSON_AddItemToObject(message, "timeout", msg_timeout);
+            cJSON_AddItemToObject(message, "offset", msg_offset);
 
-			char *req = cJSON_PrintUnformatted(message);
+            char *req = cJSON_PrintUnformatted(message);
 
-			retval = TeleBot_Http_Request("POST", "getUpdates", req, strlen(req), resp, sizeof(resp));
+            retval = TeleBot_Http_Request("POST",
+                                          "getUpdates",
+                                          req,
+                                          strlen(req),
+                                          resp,
+                                          sizeof(resp));
 
-			if (retval > 0)
-			{
-				TRACE("Resp: %s", resp);
+            if (retval > 0)
+            {
+                TRACE("Resp: %s", resp);
 
-				cJSON *json = cJSON_ParseWithLength(resp, sizeof(resp));
+                cJSON *json = cJSON_ParseWithLength(resp, sizeof(resp));
 
-				if (json != NULL)
-				{
-					cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
-					cJSON *res_item;
-					cJSON_ArrayForEach(res_item, result)
-					{
-						/*Get update id*/
-						cJSON *upd_id = cJSON_GetObjectItemCaseSensitive(res_item, "update_id");
-						if (upd_id != NULL && upd_id->valueint >= *id)
-						{
-							/*Recalculate offset*/
-							*id = upd_id->valueint + 1;
-						}
+                if (json != NULL)
+                {
+                    cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+                    cJSON *res_item;
+                    cJSON_ArrayForEach(res_item, result)
+                    {
+                        /*Get update id*/
+                        cJSON *upd_id = cJSON_GetObjectItemCaseSensitive(res_item, "update_id");
+                        if (upd_id != NULL && upd_id->valueint >= *id)
+                        {
+                            /*Recalculate offset*/
+                            *id = upd_id->valueint + 1;
+                        }
 
-						cJSON *message = cJSON_GetObjectItemCaseSensitive(res_item, "message");
-						cJSON *text = cJSON_GetObjectItemCaseSensitive(message, "text");
+                        cJSON *message = cJSON_GetObjectItemCaseSensitive(res_item, "message");
+                        cJSON *text = cJSON_GetObjectItemCaseSensitive(message, "text");
 
-						if (text != NULL)
-						{
-							cJSON *chat = cJSON_GetObjectItemCaseSensitive(message, "chat");
-							cJSON *chat_id = cJSON_GetObjectItemCaseSensitive(chat, "id");
+                        if (text != NULL)
+                        {
+                            cJSON *chat = cJSON_GetObjectItemCaseSensitive(message, "chat");
+                            cJSON *chat_id = cJSON_GetObjectItemCaseSensitive(chat, "id");
 
-							TeleBot_MessageCallback((uint32_t) chat_id->valueint, text->valuestring);
-						}
-					}
+                            TeleBot_MessageCallback((uint32_t) chat_id->valueint,
+                                                    text->valuestring);
+                        }
+                    }
 
-					cJSON_Delete(json);
-				}
-			}
+                    cJSON_Delete(json);
+                }
+            }
 
-			free(req);
-		}
+            free(req);
+        }
 
-		cJSON_Delete(message);
-	}
+        cJSON_Delete(message);
+    }
 
-	return retval;
+    return retval;
 }
 
 /**
- * Sends message
+ * @brief           Implements sendMessage API method
+ *
+ * @param chat_id   Chat ID.
+ * @param msg       Message string.
+ * @param markup    Markup as cJSON structure pointer.
+ * @return          Response length for success or -1 for error.
  */
 int32_t TeleBot_SendMessage(uint32_t chat_id, const char *msg, cJSON *markup)
 {
-	int32_t retval = -1;
+    int32_t retval = -1;
 
-	/*Construct JSON method object*/
-	cJSON *message = cJSON_CreateObjectReference(NULL);
+    /*Construct JSON method object*/
+    cJSON *message = cJSON_CreateObjectReference(NULL);
 
-	if (message != NULL)
-	{
-		cJSON *msg_chat_id = cJSON_CreateNumber(chat_id);
-		cJSON *msg_text = cJSON_CreateString(msg);
+    if (message != NULL)
+    {
+        cJSON *msg_chat_id = cJSON_CreateNumber(chat_id);
+        cJSON *msg_text = cJSON_CreateString(msg);
 
-		if (msg_chat_id != NULL && msg_text != NULL)
-		{
-			cJSON_AddItemToObject(message, "chat_id", msg_chat_id);
-			cJSON_AddItemToObject(message, "text", msg_text);
+        if (msg_chat_id != NULL && msg_text != NULL)
+        {
+            cJSON_AddItemToObject(message, "chat_id", msg_chat_id);
+            cJSON_AddItemToObject(message, "text", msg_text);
 
-			if (markup != NULL)
-			{
-				cJSON_AddItemToObject(message, "reply_markup", markup);
-			}
+            if (markup != NULL)
+            {
+                cJSON_AddItemToObject(message, "reply_markup", markup);
+            }
 
-			char *req = cJSON_PrintUnformatted(message);
+            char *req = cJSON_PrintUnformatted(message);
 
-			TRACE("sendMessage: %s", req);
+            TRACE("sendMessage: %s", req);
 
-			retval = TeleBot_Http_Request("POST", "sendMessage", req, strlen(req), resp, sizeof(resp));
+            retval = TeleBot_Http_Request("POST",
+                                          "sendMessage",
+                                          req,
+                                          strlen(req),
+                                          resp,
+                                          sizeof(resp));
 
-			free(req);
-		}
+            free(req);
+        }
 
-		cJSON_Delete(message);
-	}
+        cJSON_Delete(message);
+    }
 
-	return retval;
+    return retval;
 }
 
 /**
- * @brief   Enqueue massage to send
+ * @brief       Enqueue message to send.
+ *              Application function. Adds message to queue for sen
  *
- * @param msg
+ * @param msg   Message string.
  */
 void TeleBot_MessagePush(const char *msg)
 {
@@ -445,65 +500,64 @@ void TeleBot_MessagePush(const char *msg)
  */
 static void TeleBot_Task(void *arg)
 {
-	(void) arg;
-	int32_t id = -1;
-	int32_t resp_len;
+    (void) arg;
+    int32_t id = -1;
+    int32_t resp_len;
 
-	msg_queue = xQueueCreate(10, sizeof(const char *));
+    msg_queue = xQueueCreate(10, sizeof(const char*));
 
-	/*Create markup*/
-	mainMarkup = cJSON_CreateObject();
+    /*Create markup*/
+    mainMarkup = cJSON_CreateObject();
 
-	if (mainMarkup != NULL)
-	{
-		cJSON *btn1 = cJSON_CreateString("Info");
-		cJSON *btn2 = cJSON_CreateString("Sys Tick");
+    if (mainMarkup != NULL)
+    {
+        cJSON *btn1 = cJSON_CreateString("Info");
+        cJSON *btn2 = cJSON_CreateString("Sys Tick");
 
-		cJSON *btns = cJSON_CreateArray();
-		cJSON *row1 = cJSON_CreateArray();
+        cJSON *btns = cJSON_CreateArray();
+        cJSON *row1 = cJSON_CreateArray();
 
-		if (btn2 != NULL && btn1 != NULL &&
-				btns != NULL && row1 != NULL)
-		{
-			cJSON_AddItemToArray(row1, btn1);
-			cJSON_AddItemToArray(row1, btn2);
-			cJSON_AddItemToArray(btns, row1);
+        if (btn2 != NULL && btn1 != NULL && btns != NULL && row1 != NULL)
+        {
+            cJSON_AddItemToArray(row1, btn1);
+            cJSON_AddItemToArray(row1, btn2);
+            cJSON_AddItemToArray(btns, row1);
 
-			cJSON_AddItemToObject(mainMarkup, "keyboard", btns);
-		}
-	}
+            cJSON_AddItemToObject(mainMarkup, "keyboard", btns);
+        }
+    }
 
-	while (1)
-	{
-		/*Get updates*/
-		resp_len = TeleBot_GetUpdates(&id);
+    while (1)
+    {
+        /*Get updates*/
+        resp_len = TeleBot_GetUpdates(&id);
 
-		if (resp_len > 0 && id != -1)
-		{
-			memset(resp, 0, resp_len);
-		}
+        if (resp_len > 0 && id != -1)
+        {
+            memset(resp, 0, resp_len);
+        }
 
-		/* Check messages to send */
-		if (msg_queue != NULL)
-		{
-		    BaseType_t ret;
+        /* Check messages to send */
+        if (msg_queue != NULL)
+        {
+            BaseType_t ret;
 
-		    do
-		    {
-		        char *msg = NULL;
+            do
+            {
+                char *msg = NULL;
 
-		        ret = xQueueReceive(msg_queue, &msg, 0);
+                ret = xQueueReceive(msg_queue, &msg, 0);
 
-		        if (msg != NULL && last_chat_id != 0)
-		        {
-		            TeleBot_SendMessage(last_chat_id, msg, mainMarkup);
-		        }
-		    }
-		    while(ret == pdPASS);
-		}
+                if (msg != NULL && last_chat_id != 0)
+                {
+                    TeleBot_SendMessage(last_chat_id, msg, mainMarkup);
+                }
+            }
+            while (ret == pdPASS);
+        }
 
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
-	}
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
 }
 
 /**
@@ -515,21 +569,21 @@ void TeleBot_MessageCallback(uint32_t chat_id, const char *msg)
 
     char resp_msg[128];
 
-	TRACE("Message from %"PRIu32": %s", chat_id, msg);
+    TRACE("Message from %"PRIu32": %s", chat_id, msg);
 
-	if (strcmp(msg, "Info") == 0)
-	{
-	    TeleBot_SendMessage(chat_id, "STM32 TelegramBot", mainMarkup);
-	}
-	else if (strcmp(msg, "Sys Tick") == 0)
-	{
-	    snprintf(resp_msg, sizeof(resp_msg), "Sys Tick: %"PRIu32"", xTaskGetTickCount());
-	    TeleBot_SendMessage(chat_id, resp_msg, mainMarkup);
-	}
-	else
-	{
-	    TeleBot_SendMessage(chat_id, "Unknown message", mainMarkup);
-	}
+    if (strcmp(msg, "Info") == 0)
+    {
+        TeleBot_SendMessage(chat_id, "STM32 TelegramBot", mainMarkup);
+    }
+    else if (strcmp(msg, "Sys Tick") == 0)
+    {
+        snprintf(resp_msg, sizeof(resp_msg), "Sys Tick: %"PRIu32"", xTaskGetTickCount());
+        TeleBot_SendMessage(chat_id, resp_msg, mainMarkup);
+    }
+    else
+    {
+        TeleBot_SendMessage(chat_id, "Unknown message", mainMarkup);
+    }
 }
 
 int configureTlsContexts(int *socket, const char *server_name)
